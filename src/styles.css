@@ -1,0 +1,17 @@
+body { font-family: system-ui, sans-serif; background: #f4f5f7; margin: 0; }
+main { max-width: 520px; margin: 2rem auto; background: #fff; padding: 1.5rem 2rem; border-radius: 8px; box-shadow: 0 1px 4px #0002; }
+label { display: block; margin-top: 1rem; font-weight: 600; }
+input[type="text"], input[type="file"] { display: block; width: 100%; box-sizing: border-box; margin-top: .25rem; padding: .5rem; }
+button { margin-top: 1.5rem; padding: .6rem 1.4rem; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .6; }
+progress { width: 100%; margin-top: 1rem; }
+.error { color: #b00020; margin-top: .75rem; }
+fieldset { margin-top: 1rem; border: 1px solid #ccc; border-radius: 6px; }
+fieldset audio { display: block; width: 100%; margin-top: .5rem; }
+.recorder button { margin-top: .5rem; }
+fieldset .field-error { display: block; }
+.field-error { color: #b00020; font-size: .85rem; }
+.estado { margin-top: 1rem; padding: .75rem; border-radius: 6px; background: #eef; }
+.estado.listo { background: #e6f6e6; }
+.estado.error { background: #fde8e8; }
+code { word-break: break-all; }
