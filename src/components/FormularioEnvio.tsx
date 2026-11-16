@@ -1,10 +1,10 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { crearEnvio, getEnvio, type AppConfig, type Envio, type EnvioCreado } from "../api";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { crearEnvio, getEnvio, getFrases, verifyPhrase, type AppConfig, type Envio, type EnvioCreado, type Frase, type VerifyResult } from "../api";
 import AudioField from "./AudioField";
 
-const MAX_NAME_BYTES = 100;
+type Verif = { status: "checking" } | { status: "done"; result: VerifyResult } | { status: "error"; message: string };
+
 const POLL_MS = 3000;
-const byteLen = (s: string) => new TextEncoder().encode(s).length;
 
 function validateFile(file: File | null, cfg: AppConfig): string | null {
   if (!file) return "Selecciona un archivo";
@@ -15,18 +15,12 @@ function validateFile(file: File | null, cfg: AppConfig): string | null {
   return null;
 }
 
-function validateName(value: string, label: string): string | null {
-  const v = value.trim();
-  if (!v) return `${label} es obligatorio`;
-  if (byteLen(v) > MAX_NAME_BYTES) return `${label} es demasiado largo`;
-  return null;
-}
-
 export default function FormularioEnvio({ config }: { config: AppConfig }) {
-  const [nombres, setNombres] = useState("");
-  const [apellidos, setApellidos] = useState("");
-  const [referencia, setReferencia] = useState<File | null>(null);
-  const [prueba, setPrueba] = useState<File | null>(null);
+  const [frases, setFrases] = useState<Frase[] | null>(null);
+  const [frasesError, setFrasesError] = useState<string | null>(null);
+  const [files, setFiles] = useState<Record<string, File | null>>({});
+  const [verifs, setVerifs] = useState<Record<string, Verif | undefined>>({});
+  const verifToken = useRef<Record<string, number>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [progress, setProgress] = useState(0);
   const [sending, setSending] = useState(false);
@@ -61,22 +55,63 @@ export default function FormularioEnvio({ config }: { config: AppConfig }) {
     };
   }, [envio]);
 
+  useEffect(() => {
+    getFrases()
+      .then(setFrases)
+      .catch((e) => setFrasesError((e as Error).message));
+  }, []);
+
+  async function onPhraseFile(id: string, file: File | null) {
+    const token = (verifToken.current[id] ?? 0) + 1;
+    verifToken.current[id] = token;
+    setFiles((f) => ({ ...f, [id]: file }));
+    setErrors((e) => ({ ...e, [id]: null }));
+    if (!file) return setVerifs((v) => ({ ...v, [id]: undefined }));
+    const fileError = validateFile(file, config);
+    if (fileError) return setVerifs((v) => ({ ...v, [id]: { status: "error", message: fileError } }));
+    setVerifs((v) => ({ ...v, [id]: { status: "checking" } }));
+    try {
+      const result = await verifyPhrase(id, file);
+      if (verifToken.current[id] === token) setVerifs((v) => ({ ...v, [id]: { status: "done", result } }));
+    } catch (err) {
+      if (verifToken.current[id] === token)
+        setVerifs((v) => ({ ...v, [id]: { status: "error", message: (err as Error).message } }));
+    }
+  }
+
+  const allValid =
+    !!frases?.length &&
+    frases.every((f) => {
+      const v = verifs[f.id];
+      return v?.status === "done" && v.result.match;
+    });
+
   async function onSubmit(ev: FormEvent) {
     ev.preventDefault();
-    const errs = {
-      nombres: validateName(nombres, "Nombres"),
-      apellidos: validateName(apellidos, "Apellidos"),
-      referencia: validateFile(referencia, config),
-      prueba: validateFile(prueba, config),
-    };
+    const errs: Record<string, string | null> = {};
+    for (const f of frases ?? []) {
+      const v = verifs[f.id];
+      errs[f.id] = !files[f.id]
+        ? "Graba o selecciona el audio de esta frase"
+        : v?.status === "done" && v.result.match
+          ? null
+          : "La frase debe verificarse correctamente";
+    }
     setErrors(errs);
-    if (Object.values(errs).some(Boolean)) return;
+    if (Object.values(errs).some(Boolean) || !frases?.length) return;
 
     setSubmitError(null);
     setSending(true);
     setProgress(0);
     try {
-      setEnvio(await crearEnvio({ nombres: nombres.trim(), apellidos: apellidos.trim(), referencia: referencia!, prueba: prueba! }, setProgress));
+      setEnvio(
+        await crearEnvio(
+          {
+            audios: frases.map((f) => ({ fraseId: f.id, file: files[f.id]! })),
+          },
+          setProgress,
+        ),
+      );
     } catch (err) {
       setSubmitError((err as Error).message);
     } finally {
@@ -87,10 +122,8 @@ export default function FormularioEnvio({ config }: { config: AppConfig }) {
   function reset() {
     setEnvio(null);
     setEstado(null);
-    setNombres("");
-    setApellidos("");
-    setReferencia(null);
-    setPrueba(null);
+    setFiles({});
+    setVerifs({});
     setProgress(0);
     setErrors({});
   }
@@ -114,42 +147,41 @@ export default function FormularioEnvio({ config }: { config: AppConfig }) {
 
   return (
     <form onSubmit={onSubmit} noValidate>
-      <label>
-        Nombres
-        <input type="text" value={nombres} onChange={(e) => setNombres(e.target.value)} disabled={sending} />
-        {errors.nombres && <span className="field-error">{errors.nombres}</span>}
-      </label>
-      <label>
-        Apellidos
-        <input type="text" value={apellidos} onChange={(e) => setApellidos(e.target.value)} disabled={sending} />
-        {errors.apellidos && <span className="field-error">{errors.apellidos}</span>}
-      </label>
-      <AudioField
-        label="Audio de referencia"
-        slug="referencia"
-        accept={accept}
-        file={referencia}
-        error={errors.referencia}
-        disabled={sending}
-        allowRecording={canRecord}
-        onChange={setReferencia}
-      />
-      <AudioField
-        label="Audio de prueba"
-        slug="prueba"
-        accept={accept}
-        file={prueba}
-        error={errors.prueba}
-        disabled={sending}
-        allowRecording={canRecord}
-        onChange={setPrueba}
-      />
+      {frasesError && <p className="error">No se pudieron cargar las frases: {frasesError}</p>}
+      {!frases && !frasesError && <p>Cargando frases…</p>}
+      {frases?.map((f) => {
+        const v = verifs[f.id];
+        return (
+          <div key={f.id}>
+            <AudioField
+              label={`Frase ${f.orden}: “${f.frase}”`}
+              slug={`frase-${f.orden}`}
+              accept={accept}
+              file={files[f.id] ?? null}
+              error={errors[f.id]}
+              disabled={sending}
+              allowRecording={canRecord}
+              onChange={(file) => void onPhraseFile(f.id, file)}
+            />
+            {v?.status === "checking" && <small className="hint">Verificando…</small>}
+            {v?.status === "error" && <span className="field-error">{v.message}</span>}
+            {v?.status === "done" && v.result.match && (
+              <small className="ok">✔ Frase correcta ({Math.round(v.result.similarity * 100)}%)</small>
+            )}
+            {v?.status === "done" && !v.result.match && (
+              <span className="field-error">
+                No coincide ({Math.round(v.result.similarity * 100)}%). Escuchamos: “{v.result.transcription || "(silencio)"}”. Graba de nuevo.
+              </span>
+            )}
+          </div>
+        );
+      })}
       <small>
         Formatos: {config.allowed_extensions.join(", ")} · máximo {config.max_upload_mb} MB por archivo
       </small>
       {sending && <progress value={progress} max={100} />}
       {submitError && <p className="error">{submitError}</p>}
-      <button type="submit" disabled={sending}>
+      <button type="submit" disabled={sending || !allValid}>
         {sending ? `Subiendo… ${progress}%` : "Enviar"}
       </button>
     </form>
